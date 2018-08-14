@@ -1727,7 +1727,7 @@ static int install_info_symlink_wants(
 
         if (strv_isempty(list))
                 return 0;
-
+        printf ("Template validity test %s\n", i->name);
         if (unit_name_is_valid(i->name, UNIT_NAME_TEMPLATE) && i->default_instance) {
                 UnitFileInstallInfo instance = {
                         .type = _UNIT_FILE_TYPE_INVALID,
@@ -1739,6 +1739,7 @@ static int install_info_symlink_wants(
                         return r;
 
                 instance.name = buf;
+                printf("The instance buf is actually %s\n", buf);
                 r = unit_file_search(NULL, &instance, paths, SEARCH_FOLLOW_CONFIG_SYMLINKS);
                 if (r < 0)
                         return r;
@@ -1799,7 +1800,7 @@ static int install_info_symlink_link(
                 return r;
         if (r > 0)
                 return 0;
-
+        printf ("Is preset calling this to make symlinks? The name is %s\n", i->name);
         path = strjoin(config_path, "/", i->name);
         if (!path)
                 return -ENOMEM;
@@ -2875,12 +2876,15 @@ static int query_presets(const char *name, const Presets presets) {
         if (!unit_name_is_valid(name, UNIT_NAME_ANY))
                 return -EINVAL;
 
-        for (i = 0; i < presets.n_rules; i++)
+        for (i = 0; i < presets.n_rules; i++) {
+               printf ("The pattern for the rule is %s\n", presets.rules[i].pattern);
+               printf ("The name is %s \n", name);
                 if (fnmatch(presets.rules[i].pattern, name, FNM_NOESCAPE) == 0) {
                         action = presets.rules[i].action;
                         break;
                 }
-
+        }
+        // printf("Test preset \n");
         switch (action) {
         case PRESET_UNKNOWN:
                 log_debug("Preset files don't specify rule for %s. Enabling.", name);
@@ -2972,6 +2976,8 @@ static int preset_prepare_one(
 
         r = install_info_discover(scope, &tmp, paths, name, SEARCH_FOLLOW_CONFIG_SYMLINKS,
                                   &i, changes, n_changes);
+        log_debug ("The discovered name is %s\n", name);
+        log_debug ("The Unitfile install info is %s\n", i->name);
         if (r < 0)
                 return r;
         if (!streq(name, i->name)) {
@@ -3021,12 +3027,15 @@ int unit_file_preset(
         r = lookup_paths_init(&paths, scope, 0, root_dir);
         if (r < 0)
                 return r;
-
+        log_debug ("This is a test for preset\n\n");
         r = read_presets(scope, root_dir, &presets);
+        // We need a way to find where are the presets are being read. IT is likely after preset_one
+        log_debug ("Passed preset reading stage\n");
         if (r < 0)
                 return r;
 
         STRV_FOREACH(i, files) {
+                log_debug ("The preset file name is %s\n", *i);
                 r = preset_prepare_one(scope, &plus, &minus, &paths, *i, presets, changes, n_changes);
                 if (r < 0)
                         return r;
@@ -3053,6 +3062,7 @@ int unit_file_preset_all(
         assert(scope < _UNIT_FILE_SCOPE_MAX);
         assert(mode < _UNIT_FILE_PRESET_MAX);
 
+        // printf("Preset all\n");
         r = lookup_paths_init(&paths, scope, 0, root_dir);
         if (r < 0)
                 return r;

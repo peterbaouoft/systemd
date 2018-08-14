@@ -983,6 +983,33 @@ static void test_with_dropin_template(const char *root) {
         assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "with-dropin-3@instance-2.service", &state) >= 0 && state == UNIT_FILE_ENABLED);
 }
 
+static void test_preset_instantiated_units(const char *root) {
+        UnitFileChange *changes = NULL;
+        size_t n_changes = 0;
+        const char *p;
+        UnitFileState state;
+
+        p = strjoina(root, "/usr/lib/systemd/system/wanttest@.service");
+        assert_se(write_string_file(p,
+                                    "[Install]\n"
+                                    "DefaultInstance=def\n"
+                                    "WantedBy=multi-user.target\n", WRITE_STRING_FILE_CREATE) >= 0);
+
+        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "wanttest@.service", &state) >= 0 && state == UNIT_FILE_DISABLED);
+
+        p = strjoina(root, "/usr/lib/systemd/system-preset/test.preset");
+        assert_se(write_string_file(p,
+                                    "enable wanttest@.service bar0 bar1 bartest\n" , WRITE_STRING_FILE_CREATE) >= 0);
+
+        // Then test if fnmatch will catch the sequence and test further for changes
+        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "wanttest@test.service", &state) >= 0 && state == UNIT_FILE_DISABLED);
+        // assert_se(unit_file_preset(UNIT_FILE_SYSTEM, 0, root, STRV_MAKE("wanttest@test.service"), UNIT_FILE_PRESET_FULL, &changes, &n_changes) >= 0);
+
+        // assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "wanttest@test.service", &state) >= 0 && state == UNIT_FILE_ENABLED);
+        assert_se(unit_file_preset_all(UNIT_FILE_SYSTEM, 0, root, UNIT_FILE_PRESET_FULL, &changes, &n_changes) >= 0);
+        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "wanttest@test.service", &state) >= 0 && state == UNIT_FILE_DISABLED);
+}
+
 int main(int argc, char *argv[]) {
         char root[] = "/tmp/rootXXXXXX";
         const char *p;
@@ -1012,6 +1039,7 @@ int main(int argc, char *argv[]) {
         test_indirect(root);
         test_preset_and_list(root);
         test_preset_order(root);
+        test_preset_instantiated_units(root);
         test_revert(root);
         test_static_instance(root);
         test_with_dropin(root);

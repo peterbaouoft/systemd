@@ -4020,6 +4020,7 @@ int unit_get_unit_file_preset(Unit *u) {
                                 u->manager->unit_file_scope,
                                 NULL,
                                 basename(u->fragment_path));
+        printf("UNIT FILE PRESET TEST\n\n");
 
         return u->unit_file_preset;
 }

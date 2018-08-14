@@ -1,0 +1,10 @@
+Build started at 2018-08-10T18:34:35.827950
+Main binary: /usr/bin/python3
+Python system: Linux
+The Meson build system
+Version: 0.47.1
+Source dir: /root/systemd/src/shared
+Build dir: /root/systemd/src/shared/build
+Build type: native build
+
+ERROR: First statement must be a call to project

@@ -496,7 +496,6 @@ int unit_name_template(const char *f, char **ret) {
         s = new(char, a + 1 + strlen(e) + 1);
         if (!s)
                 return -ENOMEM;
-
         strcpy(mempcpy(s, f, a + 1), e);
 
         *ret = s;
