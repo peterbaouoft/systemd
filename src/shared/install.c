@@ -2877,9 +2877,9 @@ static int query_presets(const char *name, const Presets presets) {
                 return -EINVAL;
 
         for (i = 0; i < presets.n_rules; i++) {
-               printf ("The pattern for the rule is %s\n", presets.rules[i].pattern);
-               printf ("The name is %s \n", name);
-                if (fnmatch(presets.rules[i].pattern, name, FNM_NOESCAPE) == 0) {
+                /* Also wants to account the pattern to be xx@.service a b c and the name is xx@a.service xx@b.service
+ * or xx@c.service */
+                if (fnmatch(presets.rules[i].pattern, name, FNM_NOESCAPE) == 0 || matching_instantiated_pattern(presets.rules[i].pattern, name)) {
                         action = presets.rules[i].action;
                         break;
                 }
@@ -3044,6 +3044,62 @@ int unit_file_preset(
         return execute_preset(scope, flags, &plus, &minus, &paths, files, mode, changes, n_changes);
 }
 
+static int find_matching_presets (
+                UnitFileScope scope,
+                const char *name,
+                InstallContext *plus,
+                InstallContext *minus,
+                Presets  presets,
+                UnitFileChange **changes,
+                size_t *n_changes
+                const char** preset_array) {
+
+        /* This part is copied from preset_prepare_one, can be refactored tho */
+        _cleanup_(install_context_done) InstallContext tmp = {};
+        UnitFileInstallInfo *i;
+        int r;
+
+        if (install_info_find(plus, name) || install_info_find(minus, name))
+                return 0;
+
+        r = install_info_discover(scope, &tmp, paths, name, SEARCH_FOLLOW_CONFIG_SYMLINKS,
+                                  &i, changes, n_changes);
+        if (r < 0)
+                return r;
+        if (!streq(name, i->name)) {
+                log_debug("Skipping %s because it is an alias for %s.", name, i->name);
+                return 0;
+        }
+
+        r = query_presets(name, presets);
+        if (r < 0)
+                return r;
+        /* End of copied sections */
+
+        /* Copied from query_presets */
+        PresetAction action = PRESET_UNKNOWN;
+        size_t i;
+
+        if (!unit_name_is_valid(name, UNIT_NAME_ANY))
+                return -EINVAL;
+        /* End of copying */
+
+        for (i = 0; i < presets.n_rules; i++) {
+                if (unit_name_is_valid (i->name, UNIT_NAME_TEMPLATE) && check_for_multiple_words_pattern (i->name, preset_array))
+
+                        break;
+                 if (fnmatch(presets.rules[i].pattern, name, FNM_NOESCAPE) == 0) {
+                        action = presets.rules[i].action;
+                        break;
+                }
+        }
+
+        /* check_for_multiple_words_pattern works like the following -->
+ *       for instances like  xx@.service a b c. The function should return matching for names like xx@a.service
+ *       xx@b.service and xx@c.service. If at the end, matching is returned. The whole array of a b and c is also
+ *       returned */
+
+}
 int unit_file_preset_all(
                 UnitFileScope scope,
                 UnitFileFlags flags,
@@ -3092,18 +3148,25 @@ int unit_file_preset_all(
                         if (!IN_SET(de->d_type, DT_LNK, DT_REG))
                                 continue;
 
-                        /* we don't pass changes[] in, because we want to handle errors on our own */
-                        r = preset_prepare_one(scope, &plus, &minus, &paths, de->d_name, presets, NULL, 0);
-                        if (r == -ERFKILL)
-                                r = unit_file_changes_add(changes, n_changes,
-                                                          UNIT_FILE_IS_MASKED, de->d_name, NULL);
-                        else if (r == -ENOLINK)
-                                r = unit_file_changes_add(changes, n_changes,
-                                                          UNIT_FILE_IS_DANGLING, de->d_name, NULL);
-                        else if (r == -EADDRNOTAVAIL) /* Ignore generated/transient units when applying preset */
-                                continue;
-                        if (r < 0)
-                                return r;
+                        preset_array = [] /* store number of units name e.g: xx@a.service xx@b.service */
+
+                        r  = find_matching_presets(scope, de->d_name, &plus, &minus presets, NULL, 0, preset_array)
+
+                        for (name in preset_array){
+                                /* we don't pass changes[] in, because we want to handle errors on our own */
+                                r = preset_prepare_one(scope, &plus, &minus, &paths, name, presets, NULL, 0);
+                                if (r == -ERFKILL)
+                                        r = unit_file_changes_add(changes, n_changes,
+                                                                  UNIT_FILE_IS_MASKED, de->d_name, NULL);
+                                else if (r == -ENOLINK)
+                                        r = unit_file_changes_add(changes, n_changes,
+                                                                 UNIT_FILE_IS_DANGLING, de->d_name, NULL);
+                                else if (r == -EADDRNOTAVAIL) /* Ignore generated/transient units when applying preset */
+                                        continue;
+                                if (r < 0)
+                                        return r;
+                        }
+                        }
                 }
         }
 
