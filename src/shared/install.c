@@ -2957,6 +2957,41 @@ static int execute_preset(
         return r;
 }
 
+int test_instance_and_convert ( const char *pattern,
+                                const char *unit_name){
+        // input : getty@.service a b c, getty@a.service or getty@.service
+
+        // output: true that it matches getty@a.service getty@b.service getty@c.service
+        const char *parameter;
+        char *templated_name;
+        char *prefix;
+        int ret;
+
+        ret = unit_name_template (unit_name, &templated_name);
+        printf ("The templated name is %s\n", templated_name);
+        ret = unit_name_to_prefix (unit_name, &prefix);
+        printf ("The prefix from the unit is the following %s\n", prefix);
+        parameter = first_word(pattern, templated_name);
+
+        if (parameter)
+                printf ("First stage test, the output first word is %s\n", parameter);
+
+        _cleanup_strv_free_ char **l = NULL;
+        l = strv_split (parameter, WHITESPACE);
+
+        free(templated_name);
+
+        char **iter;
+        STRV_FOREACH (iter, l) {
+                char *test;
+                ret = unit_name_build(prefix, *iter, ".service", &test);
+                printf("The constructed unit name would be the follownig %s\n", test);
+                free(test);
+        }
+
+        return 0;
+}
+
 static int preset_prepare_one(
                 UnitFileScope scope,
                 InstallContext *plus,

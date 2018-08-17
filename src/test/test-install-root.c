@@ -1008,6 +1008,8 @@ static void test_preset_instantiated_units(const char *root) {
         // assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "wanttest@test.service", &state) >= 0 && state == UNIT_FILE_ENABLED);
         assert_se(unit_file_preset_all(UNIT_FILE_SYSTEM, 0, root, UNIT_FILE_PRESET_FULL, &changes, &n_changes) >= 0);
         assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "wanttest@test.service", &state) >= 0 && state == UNIT_FILE_DISABLED);
+
+        test_instance_and_convert ("foo@.service a b c ", "foo@bar.service");
 }
 
 int main(int argc, char *argv[]) {
