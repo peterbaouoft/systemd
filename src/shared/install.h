@@ -219,7 +219,7 @@ void unit_file_dump_changes(int r, const char *verb, const UnitFileChange *chang
 
 int unit_file_query_preset(UnitFileScope scope, const char *root_dir, const char *name);
 
-int test_instance_and_convert ( const char *pattern, const char *unit_name);
+int test_instance_and_convert ( const char *pattern, const char *unit_name, char ***out_strv);
 
 const char *unit_file_state_to_string(UnitFileState s) _const_;
 UnitFileState unit_file_state_from_string(const char *s) _pure_;

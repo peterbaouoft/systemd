@@ -2958,7 +2958,8 @@ static int execute_preset(
 }
 
 int test_instance_and_convert ( const char *pattern,
-                                const char *unit_name){
+                                const char *unit_name,
+                                char ***preset_array){
         // input : getty@.service a b c, getty@a.service or getty@.service
 
         // output: true that it matches getty@a.service getty@b.service getty@c.service
@@ -2994,7 +2995,55 @@ int test_instance_and_convert ( const char *pattern,
         printf("The second element of the combined strv is %s\n", out_strv[1]);
         printf ("The second element of the combined strv is %s\n", out_strv[2]);
 
+        *preset_array = TAKE_PTR(out_strv);
         return 0;
+}
+
+static int find_matching_presets (
+                UnitFileScope scope,
+                const char *name,
+                InstallContext *plus,
+                InstallContext *minus,
+                LookupPaths  *paths,
+                Presets  presets,
+                UnitFileChange **changes,
+                size_t *n_changes,
+                char*** preset_array) {
+        /* This part is copied from preset_prepare_one, can be refactored tho
+ * */
+        _cleanup_(install_context_done) InstallContext tmp = {};
+        UnitFileInstallInfo *i;
+        int r;
+        if (install_info_find(plus, name) || install_info_find(minus, name))
+                return 0;
+        r = install_info_discover(scope, &tmp, paths, name,
+SEARCH_FOLLOW_CONFIG_SYMLINKS,
+                                  &i, changes, n_changes);
+        if (r < 0)
+                return r;
+        if (!streq(name, i->name)) {
+                log_debug("Skipping %s because it is an alias for %s.", name,
+i->name);
+                return 0;
+        }
+
+        r = query_presets(name, presets);
+        if (r < 0)
+                return r;
+        /* End of copied sections */
+        /* Copied from query_presets */
+        PresetAction action = PRESET_UNKNOWN;
+        if (!unit_name_is_valid(name, UNIT_NAME_ANY))
+                return -EINVAL;
+        /* End of copying */
+
+        return 0;
+        /* check_for_multiple_words_pattern works like the following -->
+ *       for instances like  xx@.service a b c. The function should return
+ *       matching for names like xx@a.service
+ *       xx@b.service and xx@c.service. If at the end, matching is returned.
+ *       The whole array of a b and c is also
+ *       returned */
 }
 
 static int preset_prepare_one(
