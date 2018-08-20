@@ -1005,15 +1005,24 @@ static void test_preset_instantiated_units(const char *root) {
         assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "wanttest@test.service", &state) >= 0 && state == UNIT_FILE_DISABLED);
         // assert_se(unit_file_preset(UNIT_FILE_SYSTEM, 0, root, STRV_MAKE("wanttest@test.service"), UNIT_FILE_PRESET_FULL, &changes, &n_changes) >= 0);
 
-        // assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "wanttest@test.service", &state) >= 0 && state == UNIT_FILE_ENABLED);
         assert_se(unit_file_preset_all(UNIT_FILE_SYSTEM, 0, root, UNIT_FILE_PRESET_FULL, &changes, &n_changes) >= 0);
         assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "wanttest@test.service", &state) >= 0 && state == UNIT_FILE_DISABLED);
+        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "wanttest@bar0.service", &state) >= 0 && state == UNIT_FILE_ENABLED);
+        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "wanttest@bar1.service", &state) >= 0 && state == UNIT_FILE_ENABLED);
+        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "wanttest@bartest.service", &state) >= 0 && state == UNIT_FILE_ENABLED);
 
+
+        /* This was to unit test the function --> the function that checks the instantiated units */
         _cleanup_strv_free_ char **out_strv = NULL;
         test_instance_and_convert ("foo@.service a b c ", "foo@bar.service", &out_strv);
-        printf("The first element of the combined strv is %s\n", out_strv[0]);
-        printf("The second element of the combined strv is %s\n", out_strv[1]);
-        printf ("The second element of the combined strv is %s\n", out_strv[2]);
+
+        strv_clear (out_strv);
+
+        test_instance_and_convert ("foo@.service a b c", "foo@a.service", &out_strv);
+
+        strv_clear (out_strv);
+        /* Then test the preset_all after the change of query_presets */
+        test_instance_and_convert ("foo@.service a b c", "foo@.service", &out_strv);
 }
 
 int main(int argc, char *argv[]) {

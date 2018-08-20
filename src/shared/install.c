@@ -1727,7 +1727,6 @@ static int install_info_symlink_wants(
 
         if (strv_isempty(list))
                 return 0;
-        printf ("Template validity test %s\n", i->name);
         if (unit_name_is_valid(i->name, UNIT_NAME_TEMPLATE) && i->default_instance) {
                 UnitFileInstallInfo instance = {
                         .type = _UNIT_FILE_TYPE_INVALID,
@@ -1739,7 +1738,7 @@ static int install_info_symlink_wants(
                         return r;
 
                 instance.name = buf;
-                printf("The instance buf is actually %s\n", buf);
+                log_debug("The instance buf is actually %s\n", buf);
                 r = unit_file_search(NULL, &instance, paths, SEARCH_FOLLOW_CONFIG_SYMLINKS);
                 if (r < 0)
                         return r;
@@ -1800,7 +1799,7 @@ static int install_info_symlink_link(
                 return r;
         if (r > 0)
                 return 0;
-        printf ("Is preset calling this to make symlinks? The name is %s\n", i->name);
+        log_debug ("Is preset calling this to make symlinks? The name is %s\n", i->name);
         path = strjoin(config_path, "/", i->name);
         if (!path)
                 return -ENOMEM;
@@ -2869,28 +2868,34 @@ static int read_presets(UnitFileScope scope, const char *root_dir, Presets *pres
         return 0;
 }
 
-static int query_presets(const char *name, const Presets presets) {
+static int query_presets(const char *name, const Presets presets, char ***instance_name_list) {
         PresetAction action = PRESET_UNKNOWN;
         size_t i;
-
+        char **s;
         if (!unit_name_is_valid(name, UNIT_NAME_ANY))
                 return -EINVAL;
 
         for (i = 0; i < presets.n_rules; i++) {
-               printf ("The pattern for the rule is %s\n", presets.rules[i].pattern);
-               printf ("The name is %s \n", name);
-                if (fnmatch(presets.rules[i].pattern, name, FNM_NOESCAPE) == 0) {
+               // log_debug ("The pattern for the rule is %s\n", presets.rules[i].pattern);
+                if (fnmatch(presets.rules[i].pattern, name, FNM_NOESCAPE) == 0 || test_instance_and_convert (presets.rules[i].pattern, name, instance_name_list) == 0) {
+                        // log_debug ("Did the bug reach here?\n");
                         action = presets.rules[i].action;
                         break;
                 }
+                 // log_debug ("Did it reach here?\n");
         }
-        // printf("Test preset \n");
+        // log_debug("Test preset \n");
         switch (action) {
         case PRESET_UNKNOWN:
                 log_debug("Preset files don't specify rule for %s. Enabling.", name);
                 return 1;
         case PRESET_ENABLE:
-                log_debug("Preset files say enable %s.", name);
+                if (instance_name_list && *instance_name_list)
+                        STRV_FOREACH(s, *instance_name_list) {
+                                log_debug ("Preset files say enable %s.", *s);
+                        }
+                else
+                        log_debug("Preset files say enable %s.", name);
                 return 1;
         case PRESET_DISABLE:
                 log_debug("Preset files say disable %s.", name);
@@ -2908,7 +2913,7 @@ int unit_file_query_preset(UnitFileScope scope, const char *root_dir, const char
         if (r < 0)
                 return r;
 
-        return query_presets(name, presets);
+        return query_presets(name, presets, NULL);
 }
 
 static int execute_preset(
@@ -2960,90 +2965,50 @@ static int execute_preset(
 int test_instance_and_convert ( const char *pattern,
                                 const char *unit_name,
                                 char ***preset_array){
-        // input : getty@.service a b c, getty@a.service or getty@.service
-
-        // output: true that it matches getty@a.service getty@b.service getty@c.service
         const char *parameter;
-        char *templated_name;
-        char *prefix;
+        char **iter;
+        _cleanup_free_ char *templated_name = NULL, *prefix = NULL, *instance_name = NULL;
         int ret;
 
+        if (!preset_array)
+                return -1;
+
         ret = unit_name_template (unit_name, &templated_name);
-        printf ("The templated name is %s\n", templated_name);
-        ret = unit_name_to_prefix (unit_name, &prefix);
-        printf ("The prefix from the unit is the following %s\n", prefix);
+        if (!templated_name)
+                return -1;
+        log_debug ("The templated name is %s\n", templated_name);
         parameter = first_word(pattern, templated_name);
 
         if (parameter)
-                printf ("First stage test, the output first word is %s\n", parameter);
-
+                log_debug ("First stage test, the output first word is %s\n", parameter);
+        else {
+                log_debug ("The instantiated units does not match the templated\n");
+                return -1;
+        }
         _cleanup_strv_free_ char **l = NULL;
         l = strv_split (parameter, WHITESPACE);
 
-        free(templated_name);
+        /* We want the instance part of the service, and see if it matches in the list */
+        ret = unit_name_to_instance(unit_name, &instance_name);
+        log_debug ("The instance name for this unit is %s\n", instance_name);
 
-        char **iter;
-        _cleanup_strv_free_ char **out_strv = NULL;
-        STRV_FOREACH (iter, l) {
-                char *test;
-                ret = unit_name_build(prefix, *iter, ".service", &test);
-                printf("The constructed unit name would be the follownig %s\n", test);
-                strv_extend (&out_strv, test);
-                free(test);
-        }
-        printf("The first element of the combined strv is %s\n", out_strv[0]);
-        printf("The second element of the combined strv is %s\n", out_strv[1]);
-        printf ("The second element of the combined strv is %s\n", out_strv[2]);
+        if (strv_find (l, instance_name) || isempty(instance_name)) {
+                ret = unit_name_to_prefix (unit_name, &prefix);
+                log_debug ("The prefix from the unit is the following %s\n", prefix);
 
-        *preset_array = TAKE_PTR(out_strv);
-        return 0;
-}
+                _cleanup_strv_free_ char **out_strv = NULL;
+                STRV_FOREACH (iter, l) {
+                        _cleanup_free_ char *test;
+                        ret = unit_name_build(prefix, *iter, ".service", &test);
+                        strv_extend (&out_strv, test);
+                }
 
-static int find_matching_presets (
-                UnitFileScope scope,
-                const char *name,
-                InstallContext *plus,
-                InstallContext *minus,
-                LookupPaths  *paths,
-                Presets  presets,
-                UnitFileChange **changes,
-                size_t *n_changes,
-                char*** preset_array) {
-        /* This part is copied from preset_prepare_one, can be refactored tho
- * */
-        _cleanup_(install_context_done) InstallContext tmp = {};
-        UnitFileInstallInfo *i;
-        int r;
-        if (install_info_find(plus, name) || install_info_find(minus, name))
-                return 0;
-        r = install_info_discover(scope, &tmp, paths, name,
-SEARCH_FOLLOW_CONFIG_SYMLINKS,
-                                  &i, changes, n_changes);
-        if (r < 0)
-                return r;
-        if (!streq(name, i->name)) {
-                log_debug("Skipping %s because it is an alias for %s.", name,
-i->name);
-                return 0;
+                *preset_array = TAKE_PTR(out_strv);
+                return ret;
         }
 
-        r = query_presets(name, presets);
-        if (r < 0)
-                return r;
-        /* End of copied sections */
-        /* Copied from query_presets */
-        PresetAction action = PRESET_UNKNOWN;
-        if (!unit_name_is_valid(name, UNIT_NAME_ANY))
-                return -EINVAL;
-        /* End of copying */
 
-        return 0;
-        /* check_for_multiple_words_pattern works like the following -->
- *       for instances like  xx@.service a b c. The function should return
- *       matching for names like xx@a.service
- *       xx@b.service and xx@c.service. If at the end, matching is returned.
- *       The whole array of a b and c is also
- *       returned */
+        return -1;
 }
 
 static int preset_prepare_one(
@@ -3057,6 +3022,7 @@ static int preset_prepare_one(
                 size_t *n_changes) {
 
         _cleanup_(install_context_done) InstallContext tmp = {};
+        _cleanup_strv_free_ char **instance_name_list = NULL;
         UnitFileInstallInfo *i;
         int r;
 
@@ -3065,8 +3031,6 @@ static int preset_prepare_one(
 
         r = install_info_discover(scope, &tmp, paths, name, SEARCH_FOLLOW_CONFIG_SYMLINKS,
                                   &i, changes, n_changes);
-        log_debug ("The discovered name is %s\n", name);
-        log_debug ("The Unitfile install info is %s\n", i->name);
         if (r < 0)
                 return r;
         if (!streq(name, i->name)) {
@@ -3074,22 +3038,49 @@ static int preset_prepare_one(
                 return 0;
         }
 
-        r = query_presets(name, presets);
+        r = query_presets(name, presets, &instance_name_list);
         if (r < 0)
                 return r;
+        if (instance_name_list != NULL)
+                log_debug ("First stage integration complete\n");
 
         if (r > 0) {
-                r = install_info_discover(scope, plus, paths, name, SEARCH_LOAD|SEARCH_FOLLOW_CONFIG_SYMLINKS,
-                                          &i, changes, n_changes);
-                if (r < 0)
-                        return r;
+                if (instance_name_list) {
+                        char **s;
+                        STRV_FOREACH(s, instance_name_list) {
+                                r = install_info_discover(scope, plus, paths, *s, SEARCH_LOAD|SEARCH_FOLLOW_CONFIG_SYMLINKS,
+                                                          &i, changes, n_changes);
+                                if (r < 0)
+                                        return r;
 
-                r = install_info_may_process(i, paths, changes, n_changes);
-                if (r < 0)
-                        return r;
-        } else
-                r = install_info_discover(scope, minus, paths, name, SEARCH_FOLLOW_CONFIG_SYMLINKS,
-                                          &i, changes, n_changes);
+                                r = install_info_may_process(i, paths, changes, n_changes);
+                                if (r < 0)
+                                        return r;
+                        }
+                }
+                else {
+                        r = install_info_discover(scope, plus, paths, name, SEARCH_LOAD|SEARCH_FOLLOW_CONFIG_SYMLINKS,
+                                                  &i, changes, n_changes);
+                        if (r < 0)
+                                return r;
+
+                        r = install_info_may_process(i, paths, changes, n_changes);
+                        if (r < 0)
+                                return r;
+                }
+
+        } else {
+                if (instance_name_list) {
+                        char **s;
+                        STRV_FOREACH(s, instance_name_list) {
+                                r = install_info_discover(scope, minus, paths, *s, SEARCH_FOLLOW_CONFIG_SYMLINKS,
+                                                          &i, changes, n_changes);
+                        }
+                }
+                else
+                        r = install_info_discover(scope, minus, paths, name, SEARCH_FOLLOW_CONFIG_SYMLINKS,
+                                                  &i, changes, n_changes);
+        }
 
         return r;
 }
@@ -3116,15 +3107,11 @@ int unit_file_preset(
         r = lookup_paths_init(&paths, scope, 0, root_dir);
         if (r < 0)
                 return r;
-        log_debug ("This is a test for preset\n\n");
         r = read_presets(scope, root_dir, &presets);
-        // We need a way to find where are the presets are being read. IT is likely after preset_one
-        log_debug ("Passed preset reading stage\n");
         if (r < 0)
                 return r;
 
         STRV_FOREACH(i, files) {
-                log_debug ("The preset file name is %s\n", *i);
                 r = preset_prepare_one(scope, &plus, &minus, &paths, *i, presets, changes, n_changes);
                 if (r < 0)
                         return r;
@@ -3151,7 +3138,6 @@ int unit_file_preset_all(
         assert(scope < _UNIT_FILE_SCOPE_MAX);
         assert(mode < _UNIT_FILE_PRESET_MAX);
 
-        // printf("Preset all\n");
         r = lookup_paths_init(&paths, scope, 0, root_dir);
         if (r < 0)
                 return r;
