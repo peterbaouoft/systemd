@@ -2868,15 +2868,70 @@ static int read_presets(UnitFileScope scope, const char *root_dir, Presets *pres
         return 0;
 }
 
-static int query_presets(const char *name, const Presets presets) {
+static int pattern_match_multiple_instances(
+                        const char *pattern,
+                        const char *unit_name,
+                        char ***preset_array) {
+
+        const char *parameter;
+        char **iter;
+        _cleanup_free_ char *templated_name = NULL, *prefix = NULL, *instance_name = NULL;
+        int ret;
+
+        if (!preset_array || !unit_name_is_valid(unit_name, UNIT_NAME_TEMPLATE))
+                return -1;
+
+        /* We check the first word of preset pattern to see if it matches
+         * the template name */
+        ret = unit_name_template(unit_name, &templated_name);
+        if (ret < 0)
+                return ret;
+        parameter = first_word(pattern, templated_name);
+
+        if (!parameter)
+                return -1;
+
+        _cleanup_strv_free_ char **l = NULL;
+        l = strv_split(parameter, WHITESPACE);
+
+        /* We want the instance part of the service, and see if it matches in the list */
+        ret = unit_name_to_instance(unit_name, &instance_name);
+        if (ret < 0)
+                return ret;
+
+        /* If the unit name is found in the specified multiple instances, return matching with a null list */
+        if(strv_find(l, instance_name))
+                return 0;
+
+        /* Compose a list of specified instances when instance_name of the unit is empty  */
+        if (isempty(instance_name)) {
+                ret = unit_name_to_prefix(unit_name, &prefix);
+
+                _cleanup_strv_free_ char **out_strv = NULL;
+                STRV_FOREACH(iter, l) {
+                        _cleanup_free_ char *test;
+                        ret = unit_name_build(prefix, *iter, ".service", &test);
+                        if (ret < 0)
+                                return ret;
+                        strv_extend(&out_strv, test);
+                }
+
+                *preset_array = TAKE_PTR(out_strv);
+                return 0;
+        }
+        return -1;
+}
+
+static int query_presets(const char *name, const Presets presets, char ***instance_name_list) {
         PresetAction action = PRESET_UNKNOWN;
         size_t i;
-
+        char **s;
         if (!unit_name_is_valid(name, UNIT_NAME_ANY))
                 return -EINVAL;
 
         for (i = 0; i < presets.n_rules; i++)
-                if (fnmatch(presets.rules[i].pattern, name, FNM_NOESCAPE) == 0) {
+                if (fnmatch(presets.rules[i].pattern, name, FNM_NOESCAPE) == 0 ||
+                    pattern_match_multiple_instances(presets.rules[i].pattern, name, instance_name_list) == 0) {
                         action = presets.rules[i].action;
                         break;
                 }
@@ -2886,10 +2941,20 @@ static int query_presets(const char *name, const Presets presets) {
                 log_debug("Preset files don't specify rule for %s. Enabling.", name);
                 return 1;
         case PRESET_ENABLE:
-                log_debug("Preset files say enable %s.", name);
+                if (instance_name_list && *instance_name_list)
+                        STRV_FOREACH(s, *instance_name_list) {
+                                log_debug ("Preset files say enable %s.", *s);
+                        }
+                else
+                        log_debug("Preset files say enable %s.", name);
                 return 1;
         case PRESET_DISABLE:
-                log_debug("Preset files say disable %s.", name);
+                if (instance_name_list && *instance_name_list)
+                        STRV_FOREACH(s, *instance_name_list) {
+                                log_debug ("Preset files say disable %s.", *s);
+                        }
+                else
+                        log_debug("Preset files say disable %s.", name);
                 return 0;
         default:
                 assert_not_reached("invalid preset action");
@@ -2904,7 +2969,7 @@ int unit_file_query_preset(UnitFileScope scope, const char *root_dir, const char
         if (r < 0)
                 return r;
 
-        return query_presets(name, presets);
+        return query_presets(name, presets, NULL);
 }
 
 static int execute_preset(
@@ -2964,6 +3029,7 @@ static int preset_prepare_one(
                 size_t *n_changes) {
 
         _cleanup_(install_context_done) InstallContext tmp = {};
+        _cleanup_strv_free_ char **instance_name_list = NULL;
         UnitFileInstallInfo *i;
         int r;
 
@@ -2979,22 +3045,49 @@ static int preset_prepare_one(
                 return 0;
         }
 
-        r = query_presets(name, presets);
+        r = query_presets(name, presets, &instance_name_list);
         if (r < 0)
                 return r;
 
         if (r > 0) {
-                r = install_info_discover(scope, plus, paths, name, SEARCH_LOAD|SEARCH_FOLLOW_CONFIG_SYMLINKS,
-                                          &i, changes, n_changes);
-                if (r < 0)
-                        return r;
+                if (instance_name_list) {
+                        char **s;
+                        STRV_FOREACH(s, instance_name_list) {
+                                r = install_info_discover(scope, plus, paths, *s, SEARCH_LOAD|SEARCH_FOLLOW_CONFIG_SYMLINKS,
+                                                          &i, changes, n_changes);
+                                if (r < 0)
+                                        return r;
 
-                r = install_info_may_process(i, paths, changes, n_changes);
-                if (r < 0)
-                        return r;
-        } else
-                r = install_info_discover(scope, minus, paths, name, SEARCH_FOLLOW_CONFIG_SYMLINKS,
-                                          &i, changes, n_changes);
+                                r = install_info_may_process(i, paths, changes, n_changes);
+                                if (r < 0)
+                                        return r;
+                        }
+                }
+                else {
+                        r = install_info_discover(scope, plus, paths, name, SEARCH_LOAD|SEARCH_FOLLOW_CONFIG_SYMLINKS,
+                                                  &i, changes, n_changes);
+                        if (r < 0)
+                                return r;
+
+                        r = install_info_may_process(i, paths, changes, n_changes);
+                        if (r < 0)
+                                return r;
+                }
+
+        } else {
+                if (instance_name_list) {
+                        char **s;
+                        STRV_FOREACH(s, instance_name_list) {
+                                r = install_info_discover(scope, minus, paths, *s, SEARCH_FOLLOW_CONFIG_SYMLINKS,
+                                                          &i, changes, n_changes);
+                                if (r < 0)
+                                        return r;
+                        }
+                }
+                else
+                        r = install_info_discover(scope, minus, paths, name, SEARCH_FOLLOW_CONFIG_SYMLINKS,
+                                                  &i, changes, n_changes);
+        }
 
         return r;
 }
