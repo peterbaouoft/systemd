@@ -2868,6 +2868,58 @@ static int read_presets(UnitFileScope scope, const char *root_dir, Presets *pres
         return 0;
 }
 
+int test_instance_and_convert(
+                const char *pattern,
+                const char *unit_name,
+                char ***preset_array) {
+
+        const char *parameter;
+        char **iter;
+        _cleanup_free_ char *templated_name = NULL, *prefix = NULL, *instance_name = NULL;
+        int ret;
+
+        if (!preset_array || !unit_name_is_valid(unit_name, UNIT_NAME_TEMPLATE))
+                return -1;
+
+        ret = unit_name_template(unit_name, &templated_name);
+        if (ret < 0)
+                return ret;
+        parameter = first_word(pattern, templated_name);
+
+        if (!parameter)
+                return -1;
+
+        _cleanup_strv_free_ char **l = NULL;
+        l = strv_split(parameter, WHITESPACE);
+
+        /* We want the instance part of the service, and see if it matches in the list */
+        ret = unit_name_to_instance(unit_name, &instance_name);
+        if (ret < 0)
+                return ret;
+
+        /* If the unit name is found in the specified multiple instances, return matching */
+        if(strv_find(l, instance_name))
+                return 0;
+
+        /* Compose a list of specified instances when instance_name of the unit is empty  */
+        if (isempty(instance_name)) {
+                ret = unit_name_to_prefix(unit_name, &prefix);
+
+                _cleanup_strv_free_ char **out_strv = NULL;
+                STRV_FOREACH(iter, l) {
+                        _cleanup_free_ char *test;
+                        ret = unit_name_build(prefix, *iter, ".service", &test);
+                        if (ret < 0)
+                                return ret;
+                        strv_extend(&out_strv, test);
+                }
+
+                *preset_array = TAKE_PTR(out_strv);
+                return 0;
+        }
+        return -1;
+}
+
 static int query_presets(const char *name, const Presets presets, char ***instance_name_list) {
         PresetAction action = PRESET_UNKNOWN;
         size_t i;
@@ -2962,58 +3014,6 @@ static int execute_preset(
         return r;
 }
 
-int test_instance_and_convert ( const char *pattern,
-                                const char *unit_name,
-                                char ***preset_array){
-        const char *parameter;
-        char **iter;
-        _cleanup_free_ char *templated_name = NULL, *prefix = NULL, *instance_name = NULL;
-        int ret;
-
-        if (!preset_array)
-                return -1;
-
-        ret = unit_name_template (unit_name, &templated_name);
-        if (!templated_name)
-                return -1;
-        log_debug ("The templated name is %s\n", templated_name);
-        parameter = first_word(pattern, templated_name);
-
-        if (parameter)
-                log_debug ("First stage test, the output first word is %s\n", parameter);
-        else {
-                log_debug ("The instantiated units does not match the templated\n");
-                return -1;
-        }
-        _cleanup_strv_free_ char **l = NULL;
-        l = strv_split (parameter, WHITESPACE);
-
-        /* We want the instance part of the service, and see if it matches in the list */
-        ret = unit_name_to_instance(unit_name, &instance_name);
-        log_debug ("The instance name for this unit is %s\n", instance_name);
-
-        /* If the unit name is found in the specified multiple instances, return matching */
-        if(strv_find (l, instance_name))
-                return 0;
-        if (isempty(instance_name)) {
-                ret = unit_name_to_prefix (unit_name, &prefix);
-                log_debug ("The prefix from the unit is the following %s\n", prefix);
-
-                _cleanup_strv_free_ char **out_strv = NULL;
-                STRV_FOREACH (iter, l) {
-                        _cleanup_free_ char *test;
-                        ret = unit_name_build(prefix, *iter, ".service", &test);
-                        strv_extend (&out_strv, test);
-                }
-
-                *preset_array = TAKE_PTR(out_strv);
-                return ret;
-        }
-
-
-        return -1;
-}
-
 static int preset_prepare_one(
                 UnitFileScope scope,
                 InstallContext *plus,
@@ -3044,8 +3044,6 @@ static int preset_prepare_one(
         r = query_presets(name, presets, &instance_name_list);
         if (r < 0)
                 return r;
-        if (instance_name_list != NULL)
-                log_debug ("First stage integration complete\n");
 
         if (r > 0) {
                 if (instance_name_list) {
