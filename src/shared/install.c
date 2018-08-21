@@ -60,6 +60,7 @@ typedef enum {
 typedef struct {
         char *pattern;
         PresetAction action;
+        char **instances;
 } PresetRule;
 
 typedef struct {
@@ -2755,6 +2756,29 @@ int unit_file_exists(UnitFileScope scope, const LookupPaths *paths, const char *
         return 1;
 }
 
+static int split_pattern_into_instances(const char*pattern, char ***ret) {
+        _cleanup_strv_free_ char **instances = NULL;
+        _cleanup_free_ char *unit_name = NULL;
+        int r;
+
+        r = extract_first_word(&pattern, &unit_name, NULL, 0);
+        if (r < 0)
+                return r;
+
+        /* We only create instances when a rule of templated unit
+         * is seen. A rule like enable foo@.service a b c will
+         * result in an array of (a, b, c) getting returned */
+        if (unit_name_is_valid(unit_name, UNIT_NAME_TEMPLATE)) {
+                instances = strv_split(pattern, WHITESPACE);
+                if (!instances)
+                        return -ENOMEM;
+                if (ret)
+                        *ret = TAKE_PTR(instances);
+        }
+
+        return 0;
+}
+
 static int read_presets(UnitFileScope scope, const char *root_dir, Presets *presets) {
         _cleanup_(presets_freep) Presets ps = {};
         size_t n_allocated = 0;
@@ -2825,28 +2849,40 @@ static int read_presets(UnitFileScope scope, const char *root_dir, Presets *pres
                         parameter = first_word(l, "enable");
                         if (parameter) {
                                 char *pattern;
+                                char **instances = NULL;
 
                                 pattern = strdup(parameter);
                                 if (!pattern)
                                         return -ENOMEM;
 
+                                r = split_pattern_into_instances(pattern, &instances);
+                                if (r < 0)
+                                        return r;
+
                                 rule = (PresetRule) {
                                         .pattern = pattern,
                                         .action = PRESET_ENABLE,
+                                        .instances = instances,
                                 };
                         }
 
                         parameter = first_word(l, "disable");
                         if (parameter) {
                                 char *pattern;
+                                char **instances = NULL;
 
                                 pattern = strdup(parameter);
                                 if (!pattern)
                                         return -ENOMEM;
 
+                                r = split_pattern_into_instances(pattern, &instances);
+                                if (r < 0)
+                                        return r;
+
                                 rule = (PresetRule) {
                                         .pattern = pattern,
                                         .action = PRESET_DISABLE,
+                                        .instances = instances,
                                 };
                         }
 
@@ -2868,15 +2904,73 @@ static int read_presets(UnitFileScope scope, const char *root_dir, Presets *pres
         return 0;
 }
 
-static int query_presets(const char *name, const Presets presets) {
+static int pattern_match_multiple_instances(
+                        const PresetRule rule,
+                        const char *unit_name,
+                        char ***ret) {
+
+        const char *parameter;
+        _cleanup_free_ char *templated_name = NULL;
+        int r;
+
+        /* If no ret is needed or the rule itself does not have instances
+         * initalized, we return not matching */
+        if (!ret || !rule.instances)
+                return 0;
+
+        r = unit_name_template(unit_name, &templated_name);
+        if (r < 0)
+                return r;
+        parameter = first_word(rule.pattern, templated_name);
+        if (!parameter)
+                return 0;
+
+        /* Compose a list of specified instances when unit name is a template  */
+        if (unit_name_is_valid(unit_name, UNIT_NAME_TEMPLATE)) {
+                _cleanup_free_ char *prefix = NULL;
+                _cleanup_strv_free_ char **out_strv = NULL;
+                char **iter;
+
+                r = unit_name_to_prefix(unit_name, &prefix);
+                if (r < 0)
+                        return r;
+
+                STRV_FOREACH(iter, rule.instances) {
+                        _cleanup_free_ char *name = NULL;
+                        r = unit_name_build(prefix, *iter, ".service", &name);
+                        if (r < 0)
+                                return r;
+                        r = strv_extend(&out_strv, name);
+                        if (r < 0)
+                                return r;
+                }
+
+                *ret = TAKE_PTR(out_strv);
+                return 1;
+        } else {
+                /* We now know the input unit name is a Instance name */
+                _cleanup_free_ char *instance_name = NULL;
+
+                r = unit_name_to_instance(unit_name, &instance_name);
+                if (r < 0)
+                        return r;
+
+                if (strv_find(rule.instances, instance_name))
+                        return 1;
+        }
+        return 0;
+}
+
+static int query_presets(const char *name, const Presets presets, char ***instance_name_list) {
         PresetAction action = PRESET_UNKNOWN;
         size_t i;
-
+        char **s;
         if (!unit_name_is_valid(name, UNIT_NAME_ANY))
                 return -EINVAL;
 
         for (i = 0; i < presets.n_rules; i++)
-                if (fnmatch(presets.rules[i].pattern, name, FNM_NOESCAPE) == 0) {
+                if (fnmatch(presets.rules[i].pattern, name, FNM_NOESCAPE) == 0 ||
+                    pattern_match_multiple_instances(presets.rules[i], name, instance_name_list) > 0) {
                         action = presets.rules[i].action;
                         break;
                 }
@@ -2886,10 +2980,18 @@ static int query_presets(const char *name, const Presets presets) {
                 log_debug("Preset files don't specify rule for %s. Enabling.", name);
                 return 1;
         case PRESET_ENABLE:
-                log_debug("Preset files say enable %s.", name);
+                if (instance_name_list && *instance_name_list)
+                        STRV_FOREACH(s, *instance_name_list)
+                                log_debug ("Preset files say enable %s.", *s);
+                else
+                        log_debug("Preset files say enable %s.", name);
                 return 1;
         case PRESET_DISABLE:
-                log_debug("Preset files say disable %s.", name);
+                if (instance_name_list && *instance_name_list)
+                        STRV_FOREACH(s, *instance_name_list)
+                                log_debug ("Preset files say disable %s.", *s);
+                else
+                        log_debug("Preset files say disable %s.", name);
                 return 0;
         default:
                 assert_not_reached("invalid preset action");
@@ -2904,7 +3006,7 @@ int unit_file_query_preset(UnitFileScope scope, const char *root_dir, const char
         if (r < 0)
                 return r;
 
-        return query_presets(name, presets);
+        return query_presets(name, presets, NULL);
 }
 
 static int execute_preset(
@@ -2964,6 +3066,7 @@ static int preset_prepare_one(
                 size_t *n_changes) {
 
         _cleanup_(install_context_done) InstallContext tmp = {};
+        _cleanup_strv_free_ char **instance_name_list = NULL;
         UnitFileInstallInfo *i;
         int r;
 
@@ -2979,22 +3082,48 @@ static int preset_prepare_one(
                 return 0;
         }
 
-        r = query_presets(name, presets);
+        r = query_presets(name, presets, &instance_name_list);
         if (r < 0)
                 return r;
 
         if (r > 0) {
-                r = install_info_discover(scope, plus, paths, name, SEARCH_LOAD|SEARCH_FOLLOW_CONFIG_SYMLINKS,
-                                          &i, changes, n_changes);
-                if (r < 0)
-                        return r;
+                if (instance_name_list) {
+                        char **s;
+                        STRV_FOREACH(s, instance_name_list) {
+                                r = install_info_discover(scope, plus, paths, *s, SEARCH_LOAD|SEARCH_FOLLOW_CONFIG_SYMLINKS,
+                                                          &i, changes, n_changes);
+                                if (r < 0)
+                                        return r;
 
-                r = install_info_may_process(i, paths, changes, n_changes);
-                if (r < 0)
-                        return r;
-        } else
-                r = install_info_discover(scope, minus, paths, name, SEARCH_FOLLOW_CONFIG_SYMLINKS,
-                                          &i, changes, n_changes);
+                                r = install_info_may_process(i, paths, changes, n_changes);
+                                if (r < 0)
+                                        return r;
+                        }
+                } else {
+                        r = install_info_discover(scope, plus, paths, name, SEARCH_LOAD|SEARCH_FOLLOW_CONFIG_SYMLINKS,
+                                                  &i, changes, n_changes);
+                        if (r < 0)
+                                return r;
+
+                        r = install_info_may_process(i, paths, changes, n_changes);
+                        if (r < 0)
+                                return r;
+                }
+
+        } else {
+                if (instance_name_list) {
+                        char **s;
+                        STRV_FOREACH(s, instance_name_list) {
+                                r = install_info_discover(scope, minus, paths, *s, SEARCH_FOLLOW_CONFIG_SYMLINKS,
+                                                          &i, changes, n_changes);
+                                if (r < 0)
+                                        return r;
+                        }
+                }
+                else
+                        r = install_info_discover(scope, minus, paths, name, SEARCH_FOLLOW_CONFIG_SYMLINKS,
+                                                  &i, changes, n_changes);
+        }
 
         return r;
 }
