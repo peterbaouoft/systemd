@@ -2868,10 +2868,10 @@ static int read_presets(UnitFileScope scope, const char *root_dir, Presets *pres
         return 0;
 }
 
-int test_instance_and_convert(
-                const char *pattern,
-                const char *unit_name,
-                char ***preset_array) {
+static int pattern_match_multiple_instances(
+                        const char *pattern,
+                        const char *unit_name,
+                        char ***preset_array) {
 
         const char *parameter;
         char **iter;
@@ -2897,7 +2897,7 @@ int test_instance_and_convert(
         if (ret < 0)
                 return ret;
 
-        /* If the unit name is found in the specified multiple instances, return matching */
+        /* If the unit name is found in the specified multiple instances, return matching with a null list */
         if(strv_find(l, instance_name))
                 return 0;
 
@@ -2928,15 +2928,12 @@ static int query_presets(const char *name, const Presets presets, char ***instan
                 return -EINVAL;
 
         for (i = 0; i < presets.n_rules; i++) {
-               // log_debug ("The pattern for the rule is %s\n", presets.rules[i].pattern);
-                if (fnmatch(presets.rules[i].pattern, name, FNM_NOESCAPE) == 0 || test_instance_and_convert (presets.rules[i].pattern, name, instance_name_list) == 0) {
-                        // log_debug ("Did the bug reach here?\n");
+                if (fnmatch(presets.rules[i].pattern, name, FNM_NOESCAPE) == 0 ||
+                    pattern_match_multiple_instances(presets.rules[i].pattern, name, instance_name_list) == 0) {
                         action = presets.rules[i].action;
                         break;
                 }
-                 // log_debug ("Did it reach here?\n");
         }
-        // log_debug("Test preset \n");
         switch (action) {
         case PRESET_UNKNOWN:
                 log_debug("Preset files don't specify rule for %s. Enabling.", name);
@@ -2950,7 +2947,12 @@ static int query_presets(const char *name, const Presets presets, char ***instan
                         log_debug("Preset files say enable %s.", name);
                 return 1;
         case PRESET_DISABLE:
-                log_debug("Preset files say disable %s.", name);
+                if (instance_name_list && *instance_name_list)
+                        STRV_FOREACH(s, *instance_name_list) {
+                                log_debug ("Preset files say disable %s.", *s);
+                        }
+                else
+                        log_debug("Preset files say disable %s.", name);
                 return 0;
         default:
                 assert_not_reached("invalid preset action");
@@ -3076,6 +3078,8 @@ static int preset_prepare_one(
                         STRV_FOREACH(s, instance_name_list) {
                                 r = install_info_discover(scope, minus, paths, *s, SEARCH_FOLLOW_CONFIG_SYMLINKS,
                                                           &i, changes, n_changes);
+                                if (r < 0)
+                                        return r;
                         }
                 }
                 else
