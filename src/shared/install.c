@@ -2992,7 +2992,10 @@ int test_instance_and_convert ( const char *pattern,
         ret = unit_name_to_instance(unit_name, &instance_name);
         log_debug ("The instance name for this unit is %s\n", instance_name);
 
-        if (strv_find (l, instance_name) || isempty(instance_name)) {
+        /* If the unit name is found in the specified multiple instances, return matching */
+        if(strv_find (l, instance_name))
+                return 0;
+        if (isempty(instance_name)) {
                 ret = unit_name_to_prefix (unit_name, &prefix);
                 log_debug ("The prefix from the unit is the following %s\n", prefix);
 

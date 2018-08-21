@@ -983,7 +983,7 @@ static void test_with_dropin_template(const char *root) {
         assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "with-dropin-3@instance-2.service", &state) >= 0 && state == UNIT_FILE_ENABLED);
 }
 
-static void test_preset_instantiated_units(const char *root) {
+static void test_preset_multiple_instances(const char *root) {
         UnitFileChange *changes = NULL;
         size_t n_changes = 0;
         const char *p;
@@ -1001,28 +1001,39 @@ static void test_preset_instantiated_units(const char *root) {
         assert_se(write_string_file(p,
                                     "enable wanttest@.service bar0 bar1 bartest\n" , WRITE_STRING_FILE_CREATE) >= 0);
 
-        // Then test if fnmatch will catch the sequence and test further for changes
-        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "wanttest@test.service", &state) >= 0 && state == UNIT_FILE_DISABLED);
-        // assert_se(unit_file_preset(UNIT_FILE_SYSTEM, 0, root, STRV_MAKE("wanttest@test.service"), UNIT_FILE_PRESET_FULL, &changes, &n_changes) >= 0);
+
+        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "wanttest@bar0.service", &state) >= 0 && state == UNIT_FILE_DISABLED);
+
+        /* Preset a single instantiated unit */
+        assert_se(unit_file_preset(UNIT_FILE_SYSTEM, 0, root, STRV_MAKE("wanttest@bar0.service"), UNIT_FILE_PRESET_FULL, &changes, &n_changes) >= 0);
+        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "wanttest@bar0.service", &state) >= 0 && state == UNIT_FILE_ENABLED);
+        assert_se(n_changes == 1);
+        assert_se(changes[0].type == UNIT_FILE_SYMLINK);
+        p = strjoina(root, SYSTEM_CONFIG_UNIT_PATH"/multi-user.target.wants/wanttest@bar0.service");
+        assert_se(streq(changes[0].path, p));
+        unit_file_changes_free(changes, n_changes);
+        changes = NULL; n_changes = 0;
+
+        assert_se(unit_file_disable(UNIT_FILE_SYSTEM, 0, root, STRV_MAKE("wanttest@bar0.service"), &changes, &n_changes) >= 0);
+        assert_se(n_changes == 1);
+        assert_se(changes[0].type == UNIT_FILE_UNLINK);
+        p = strjoina(root, SYSTEM_CONFIG_UNIT_PATH"/multi-user.target.wants/wanttest@bar0.service");
+        assert_se(streq(changes[0].path, p));
+        unit_file_changes_free(changes, n_changes);
+        changes = NULL; n_changes = 0;
+
+        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "wanttest@def.service", &state) >= 0 && state == UNIT_FILE_DISABLED);
+        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "wanttest@bar1.service", &state) >= 0 && state == UNIT_FILE_DISABLED);
+        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "wanttest@bartest.service", &state) >= 0 && state == UNIT_FILE_DISABLED);
 
         assert_se(unit_file_preset_all(UNIT_FILE_SYSTEM, 0, root, UNIT_FILE_PRESET_FULL, &changes, &n_changes) >= 0);
-        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "wanttest@test.service", &state) >= 0 && state == UNIT_FILE_DISABLED);
+        assert_se(n_changes > 0);
+
+        /* Only instances on the list should be enabled, not including the default instance */
+        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "wanttest@def.service", &state) >= 0 && state == UNIT_FILE_DISABLED);
         assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "wanttest@bar0.service", &state) >= 0 && state == UNIT_FILE_ENABLED);
         assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "wanttest@bar1.service", &state) >= 0 && state == UNIT_FILE_ENABLED);
         assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "wanttest@bartest.service", &state) >= 0 && state == UNIT_FILE_ENABLED);
-
-
-        /* This was to unit test the function --> the function that checks the instantiated units */
-        _cleanup_strv_free_ char **out_strv = NULL;
-        test_instance_and_convert ("foo@.service a b c ", "foo@bar.service", &out_strv);
-
-        strv_clear (out_strv);
-
-        test_instance_and_convert ("foo@.service a b c", "foo@a.service", &out_strv);
-
-        strv_clear (out_strv);
-        /* Then test the preset_all after the change of query_presets */
-        test_instance_and_convert ("foo@.service a b c", "foo@.service", &out_strv);
 }
 
 int main(int argc, char *argv[]) {
@@ -1054,7 +1065,7 @@ int main(int argc, char *argv[]) {
         test_indirect(root);
         test_preset_and_list(root);
         test_preset_order(root);
-        test_preset_instantiated_units(root);
+        test_preset_multiple_instances(root);
         test_revert(root);
         test_static_instance(root);
         test_with_dropin(root);
