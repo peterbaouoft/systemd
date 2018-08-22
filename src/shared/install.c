@@ -2871,37 +2871,36 @@ static int read_presets(UnitFileScope scope, const char *root_dir, Presets *pres
 static int pattern_match_multiple_instances(
                         const char *pattern,
                         const char *unit_name,
-                        char ***preset_array) {
+                        char ***instance_array) {
 
         const char *parameter;
         char **iter;
         _cleanup_free_ char *templated_name = NULL, *prefix = NULL, *instance_name = NULL;
-        int ret;
+        int r;
 
-        if (!preset_array || !unit_name_is_valid(unit_name, UNIT_NAME_TEMPLATE))
-                return -1;
+        if (!instance_array || !unit_name_is_valid(unit_name, UNIT_NAME_TEMPLATE))
+                return 0;
 
         /* We check the first word of preset pattern to see if it matches
          * the template name */
-        ret = unit_name_template(unit_name, &templated_name);
-        if (ret < 0)
-                return ret;
+        r = unit_name_template(unit_name, &templated_name);
+        if (r < 0)
+                return r;
         parameter = first_word(pattern, templated_name);
-
         if (!parameter)
-                return -1;
+                return 0;
 
         _cleanup_strv_free_ char **l = NULL;
         l = strv_split(parameter, WHITESPACE);
 
         /* We want the instance part of the service, and see if it matches in the list */
         ret = unit_name_to_instance(unit_name, &instance_name);
-        if (ret < 0)
-                return ret;
+        if (r < 0)
+                return r;
 
         /* If the unit name is found in the specified multiple instances, return matching with a null list */
-        if(strv_find(l, instance_name))
-                return 0;
+        if (strv_find(l, instance_name))
+                return 1;
 
         /* Compose a list of specified instances when instance_name of the unit is empty  */
         if (isempty(instance_name)) {
@@ -2909,14 +2908,16 @@ static int pattern_match_multiple_instances(
 
                 _cleanup_strv_free_ char **out_strv = NULL;
                 STRV_FOREACH(iter, l) {
-                        _cleanup_free_ char *test;
-                        ret = unit_name_build(prefix, *iter, ".service", &test);
+                        _cleanup_free_ char *test = NULL;
+                        r = unit_name_build(prefix, *iter, ".service", &test);
                         if (ret < 0)
-                                return ret;
-                        strv_extend(&out_strv, test);
+                                return r;
+                        r = strv_extend(&out_strv, test);
+                        if (r < 0)
+                                return r;
                 }
 
-                *preset_array = TAKE_PTR(out_strv);
+                *instance_array = TAKE_PTR(out_strv);
                 return 0;
         }
         return -1;
@@ -2942,17 +2943,15 @@ static int query_presets(const char *name, const Presets presets, char ***instan
                 return 1;
         case PRESET_ENABLE:
                 if (instance_name_list && *instance_name_list)
-                        STRV_FOREACH(s, *instance_name_list) {
+                        STRV_FOREACH(s, *instance_name_list)
                                 log_debug ("Preset files say enable %s.", *s);
-                        }
                 else
                         log_debug("Preset files say enable %s.", name);
                 return 1;
         case PRESET_DISABLE:
                 if (instance_name_list && *instance_name_list)
-                        STRV_FOREACH(s, *instance_name_list) {
+                        STRV_FOREACH(s, *instance_name_list)
                                 log_debug ("Preset files say disable %s.", *s);
-                        }
                 else
                         log_debug("Preset files say disable %s.", name);
                 return 0;
@@ -3062,8 +3061,7 @@ static int preset_prepare_one(
                                 if (r < 0)
                                         return r;
                         }
-                }
-                else {
+                } else {
                         r = install_info_discover(scope, plus, paths, name, SEARCH_LOAD|SEARCH_FOLLOW_CONFIG_SYMLINKS,
                                                   &i, changes, n_changes);
                         if (r < 0)
