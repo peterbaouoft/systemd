@@ -2825,6 +2825,7 @@ static int read_presets(UnitFileScope scope, const char *root_dir, Presets *pres
                         parameter = first_word(l, "enable");
                         if (parameter) {
                                 char *pattern;
+                                char *instance_name;
 
                                 pattern = strdup(parameter);
                                 if (!pattern)
@@ -2833,6 +2834,7 @@ static int read_presets(UnitFileScope scope, const char *root_dir, Presets *pres
                                 rule = (PresetRule) {
                                         .pattern = pattern,
                                         .action = PRESET_ENABLE,
+                                        .instances = instances,
                                 };
                         }
 
@@ -2847,6 +2849,7 @@ static int read_presets(UnitFileScope scope, const char *root_dir, Presets *pres
                                 rule = (PresetRule) {
                                         .pattern = pattern,
                                         .action = PRESET_DISABLE,
+                                        .instances = instances,
                                 };
                         }
 
