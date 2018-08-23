@@ -2872,58 +2872,45 @@ static int read_presets(UnitFileScope scope, const char *root_dir, Presets *pres
 }
 
 static int pattern_match_multiple_instances(
-                        const char *pattern,
-                        const char *unit_name,
-                        char ***instance_array) {
+                                const PresetRule rule,
+                                const char *unit_name,
+                                char ***instance_array) {
+
 
         const char *parameter;
         char **iter;
         _cleanup_free_ char *templated_name = NULL, *prefix = NULL, *instance_name = NULL;
         int r;
 
-        if (!instance_array || !unit_name_is_valid(unit_name, UNIT_NAME_TEMPLATE))
+        if (!instance_array)
                 return 0;
 
-        /* We check the first word of preset pattern to see if it matches
-         * the template name */
-        r = unit_name_template(unit_name, &templated_name);
-        if (r < 0)
-                return r;
-        parameter = first_word(pattern, templated_name);
+        /* For preset a single instantiated service e.g foo@bar.service,
+           if it is found within the instance_names, matching returned */
+        if (unit_name_is_valid(unit_name, UNIT_NAME_INSTANCE) &&
+            strv_find(rule.instances, unit_name))
+                return 1;
+
+        if (!unit_name_is_valid(unit_name, UNIT_NAME_TEMPLATE))
+                return 0;
+
+        /* If the pattern matches to the template name,
+         * return all instances, copied from preset rule */
+        parameter = first_word(rule.pattern, unit_name)
         if (!parameter)
                 return 0;
 
-        _cleanup_strv_free_ char **l = NULL;
-        l = strv_split(parameter, WHITESPACE);
-
-        /* We want the instance part of the service, and see if it matches in the list */
-        ret = unit_name_to_instance(unit_name, &instance_name);
-        if (r < 0)
-                return r;
-
-        /* If the unit name is found in the specified multiple instances, return matching with a null list */
-        if (strv_find(l, instance_name))
+        /* When instances are not allocated for the rule,
+         * it means there is only templated service wanted,(e.g: enable foo@.service)
+         * thus early return matching here */
+        if (!rule.instances)
                 return 1;
 
-        /* Compose a list of specified instances when instance_name of the unit is empty  */
-        if (isempty(instance_name)) {
-                ret = unit_name_to_prefix(unit_name, &prefix);
+        *instance_array = strv_copy(rule.instances)
+        if (*instance_array)
+                return -ENOMEM;
 
-                _cleanup_strv_free_ char **out_strv = NULL;
-                STRV_FOREACH(iter, l) {
-                        _cleanup_free_ char *test = NULL;
-                        r = unit_name_build(prefix, *iter, ".service", &test);
-                        if (ret < 0)
-                                return r;
-                        r = strv_extend(&out_strv, test);
-                        if (r < 0)
-                                return r;
-                }
-
-                *instance_array = TAKE_PTR(out_strv);
-                return 0;
-        }
-        return -1;
+        return 1;
 }
 
 static int query_presets(const char *name, const Presets presets, char ***instance_name_list) {
@@ -2935,7 +2922,7 @@ static int query_presets(const char *name, const Presets presets, char ***instan
 
         for (i = 0; i < presets.n_rules; i++)
                 if (fnmatch(presets.rules[i].pattern, name, FNM_NOESCAPE) == 0 ||
-                    pattern_match_multiple_instances(presets.rules[i].pattern, name, instance_name_list) == 0) {
+                    pattern_match_multiple_instances(presets.rules[i], name, instance_name_list) > 0) {
                         action = presets.rules[i].action;
                         break;
                 }
