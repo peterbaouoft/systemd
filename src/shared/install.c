@@ -2755,6 +2755,43 @@ int unit_file_exists(UnitFileScope scope, const LookupPaths *paths, const char *
         return 1;
 }
 
+/* Write unit test to test this! and verifies its functionality */
+static int create_instance_names_from_presets (const char *rule_pattern,
+                                               char ***instance_array) {
+
+        r = extract_first_word(&parameter, &unit_name, NULL, 0)
+        if (r < 0)
+                return r;
+
+        if (unit_name_is_valid(unit_name, UNIT_NAME_TEMPLATE)) {
+                _cleanup_free_ char * prefix = NULL;
+                char **iter;
+
+                r = unit_name_to_prefix(unit_name,  &prefix);
+                if (r < 0)
+                        return r;
+
+                l = strv_split(parameter, WHITESPACE);
+
+                cleanup_strv_free_ char **out_strv = NULL;
+                STRV_FOREACH(iter, l) {
+                        _cleanup_free_ char *temp = NULL;
+                        r = unit_name_build(prefix, *iter, ".service", &temp);
+                        if (ret < 0)
+                                return ret;
+                        strv_extend(&out_strv, temp);
+                                return r;
+                        r = strv_extend(&out_strv, temp);
+                        if (r < 0)
+                                return r;
+                }
+
+        }
+
+
+        return 0;
+}
+
 static int read_presets(UnitFileScope scope, const char *root_dir, Presets *presets) {
         _cleanup_(presets_freep) Presets ps = {};
         size_t n_allocated = 0;
@@ -2825,7 +2862,7 @@ static int read_presets(UnitFileScope scope, const char *root_dir, Presets *pres
                         parameter = first_word(l, "enable");
                         if (parameter) {
                                 char *pattern;
-                                char *instance_name;
+                                char **instances;
 
                                 pattern = strdup(parameter);
                                 if (!pattern)
@@ -2882,7 +2919,7 @@ static int pattern_match_multiple_instances(
         _cleanup_free_ char *templated_name = NULL, *prefix = NULL, *instance_name = NULL;
         int r;
 
-        if (!instance_array)
+        if (!instance_array || !rule.instances)
                 return 0;
 
         /* For preset a single instantiated service e.g foo@bar.service,
