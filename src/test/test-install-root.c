@@ -998,18 +998,9 @@ static void test_preset_multiple_instances(const char *root) {
 
         assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "foo@.service", &state) >= 0 && state == UNIT_FILE_DISABLED);
 
-        p = strjoina(root, "/usr/lib/systemd/system/bar@.service");
-        assert_se(write_string_file(p,
-                                    "[Install]\n"
-                                    "DefaultInstance=def\n"
-                                    "WantedBy=multi-user.target\n", WRITE_STRING_FILE_CREATE) >= 0);
-
-        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "bar@.service", &state) >= 0 && state == UNIT_FILE_DISABLED);
-
         p = strjoina(root, "/usr/lib/systemd/system-preset/test.preset");
         assert_se(write_string_file(p,
                                     "enable foo@.service bar0 bar1 bartest\n"
-                                    "disable bar@.service foo0 foo1\n"
                                     "enable emptylist@.service\n" /* This line ensures the old functionality still works */
                                     "disable *\n" , WRITE_STRING_FILE_CREATE) >= 0);
 
@@ -1030,14 +1021,6 @@ static void test_preset_multiple_instances(const char *root) {
         assert_se(changes[0].type == UNIT_FILE_UNLINK);
         p = strjoina(root, SYSTEM_CONFIG_UNIT_PATH"/multi-user.target.wants/foo@bar0.service");
         assert_se(streq(changes[0].path, p));
-        unit_file_changes_free(changes, n_changes);
-        changes = NULL; n_changes = 0;
-
-        /* Prepare for the case where we use preset rule to disable instances */
-        assert_se(unit_file_enable(UNIT_FILE_SYSTEM, 0, root, STRV_MAKE("bar@foo0.service"), &changes, &n_changes) >= 0);
-        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "bar@foo0.service", &state) >= 0 && state == UNIT_FILE_ENABLED);
-        assert_se(unit_file_preset(UNIT_FILE_SYSTEM, 0, root, STRV_MAKE("bar@foo0.service"), UNIT_FILE_PRESET_FULL, &changes, &n_changes) >= 0);
-        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "bar@foo0.service", &state) >= 0 && state == UNIT_FILE_DISABLED);
         unit_file_changes_free(changes, n_changes);
         changes = NULL; n_changes = 0;
 

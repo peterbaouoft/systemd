@@ -2758,24 +2758,32 @@ int unit_file_exists(UnitFileScope scope, const LookupPaths *paths, const char *
         return 1;
 }
 
-static int split_pattern_into_instances(const char *pattern, char ***ret) {
+static int split_pattern_into_name_and_instances(const char *pattern, char **out_unit_name, char ***out_instances) {
         _cleanup_strv_free_ char **instances = NULL;
         _cleanup_free_ char *unit_name = NULL;
         int r;
 
+        assert(pattern);
+
         r = extract_first_word(&pattern, &unit_name, NULL, 0);
         if (r < 0)
                 return r;
+        if (out_unit_name)
+                *out_unit_name = TAKE_PTR(unit_name);
 
-        /* We only create instances when a rule of templated unit
-         * is seen. A rule like enable foo@.service a b c will
-         * result in an array of (a, b, c) getting returned */
-        if (unit_name_is_valid(unit_name, UNIT_NAME_TEMPLATE) && pattern) {
+        /* We only handles the instances logic when pattern is non-null */
+        if (pattern) {
+                /* We only create instances when a rule of templated unit
+                 * is seen. A rule like enable foo@.service a b c will
+                 * result in an array of (a, b, c) getting returned */
+                if (!unit_name_is_valid(unit_name, UNIT_NAME_TEMPLATE))
+                        return -EINVAL;
+
                 instances = strv_split(pattern, WHITESPACE);
                 if (!instances)
                         return -ENOMEM;
-                if (ret)
-                        *ret = TAKE_PTR(instances);
+                if (out_instances)
+                        *out_instances = TAKE_PTR(instances);
         }
 
         return 0;
@@ -2850,19 +2858,17 @@ static int read_presets(UnitFileScope scope, const char *root_dir, Presets *pres
 
                         parameter = first_word(l, "enable");
                         if (parameter) {
-                                char *pattern;
+                                char *unit_name;
                                 char **instances = NULL;
 
-                                pattern = strdup(parameter);
-                                if (!pattern)
-                                        return -ENOMEM;
+                                r = split_pattern_into_name_and_instances(parameter, &unit_name, &instances);
 
-                                r = split_pattern_into_instances(pattern, &instances);
+                                log_debug("The moment of truth, the unit name is now is %s\n", unit_name);
                                 if (r < 0)
-                                        return r;
+                                        log_warning("Invalid line %s, ignoring.", l);
 
                                 rule = (PresetRule) {
-                                        .pattern = pattern,
+                                        .pattern = unit_name,
                                         .action = PRESET_ENABLE,
                                         .instances = instances,
                                 };
@@ -2871,20 +2877,15 @@ static int read_presets(UnitFileScope scope, const char *root_dir, Presets *pres
                         parameter = first_word(l, "disable");
                         if (parameter) {
                                 char *pattern;
-                                char **instances = NULL;
 
                                 pattern = strdup(parameter);
                                 if (!pattern)
                                         return -ENOMEM;
 
-                                r = split_pattern_into_instances(pattern, &instances);
-                                if (r < 0)
-                                        return r;
-
                                 rule = (PresetRule) {
                                         .pattern = pattern,
                                         .action = PRESET_DISABLE,
-                                        .instances = instances,
+                                        .instances = NULL,
                                 };
                         }
 
@@ -3121,8 +3122,7 @@ static int preset_prepare_one(
                                 if (r < 0)
                                         return r;
                         }
-                }
-                else
+                } else
                         r = install_info_discover(scope, minus, paths, name, SEARCH_FOLLOW_CONFIG_SYMLINKS,
                                                   &i, changes, n_changes);
         }
