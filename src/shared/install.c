@@ -88,8 +88,10 @@ static inline void presets_freep(Presets *p) {
         if (!p)
                 return;
 
-        for (i = 0; i < p->n_rules; i++)
+        for (i = 0; i < p->n_rules; i++) {
                 free(p->rules[i].pattern);
+                strv_free(p->rules[i].instances);
+        }
 
         free(p->rules);
         p->n_rules = 0;
@@ -2756,7 +2758,7 @@ int unit_file_exists(UnitFileScope scope, const LookupPaths *paths, const char *
         return 1;
 }
 
-static int split_pattern_into_instances(const char*pattern, char ***ret) {
+static int split_pattern_into_instances(const char *pattern, char ***ret) {
         _cleanup_strv_free_ char **instances = NULL;
         _cleanup_free_ char *unit_name = NULL;
         int r;
@@ -2768,7 +2770,7 @@ static int split_pattern_into_instances(const char*pattern, char ***ret) {
         /* We only create instances when a rule of templated unit
          * is seen. A rule like enable foo@.service a b c will
          * result in an array of (a, b, c) getting returned */
-        if (unit_name_is_valid(unit_name, UNIT_NAME_TEMPLATE)) {
+        if (unit_name_is_valid(unit_name, UNIT_NAME_TEMPLATE) && pattern) {
                 instances = strv_split(pattern, WHITESPACE);
                 if (!instances)
                         return -ENOMEM;

@@ -1010,8 +1010,8 @@ static void test_preset_multiple_instances(const char *root) {
         assert_se(write_string_file(p,
                                     "enable foo@.service bar0 bar1 bartest\n"
                                     "disable bar@.service foo0 foo1\n"
+                                    "enable emptylist@.service\n" /* This line ensures the old functionality still works */
                                     "disable *\n" , WRITE_STRING_FILE_CREATE) >= 0);
-
 
         assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "foo@bar0.service", &state) >= 0 && state == UNIT_FILE_DISABLED);
 
